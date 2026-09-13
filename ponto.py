@@ -618,7 +618,7 @@ elif st.session_state.view == "colaborador":
     user_data = df_users[df_users["id"] == st.session_state.colab_id].iloc[0]
 
     # 2. Atualização automática contínua e sentinela
-    st_autorefresh(interval=15 * 1000, key="auto_refresh_colab")
+    st_autorefresh(interval=15 * 1000, key="auto_refresh_colab_unique")
     processar_saidas_automaticas_inatividade()
 
     # 3. Bloco Inteligente de Download do Instalador
