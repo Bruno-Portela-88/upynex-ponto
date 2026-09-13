@@ -9,7 +9,48 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from streamlit_autorefresh import st_autorefresh
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from supabase import create_client, Client
 
+SUPABASE_URL = "https://ozopxewdyoaggghwuqmj.supabase.co"
+SUPABASE_KEY = "sb_publishable_KWq6z4doRuve3fD0YSlWXA_HB-TBgrZ"
+
+@st.cache_resource
+def init_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = init_supabase()
+
+def obter_horario_brasilia():
+    return datetime.now(ZoneInfo("America/Sao_Paulo"))
+
+def buscar_ultimo_registro(nome_colaborador):
+    try:
+        hoje_inicio = obter_horario_brasilia().strftime("%Y-%m-%dT00:00:00")
+        resposta = (
+            supabase.table("ponto_registros")
+            .select("*")
+            .eq("colaborador", nome_colaborador)
+            .gte("data_hora", hoje_inicio)
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if resposta.data and len(resposta.data) > 0:
+            return resposta.data[0]["tipo"]
+    except Exception as e:
+        st.error(f"Erro ao consultar ponto: {e}")
+    return None
+
+def registrar_ponto(nome_colaborador, tipo_registro):
+    agora_iso = obter_horario_brasilia().isoformat()
+    dados = {
+        "colaborador": nome_colaborador,
+        "tipo": tipo_registro,
+        "data_hora": agora_iso
+    }
+    supabase.table("ponto_registros").insert(dados).execute()
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(
@@ -250,7 +291,9 @@ def processar_saidas_automaticas_inatividade():
     if df_pontos.empty or df_sessoes.empty:
         return
     
-    agora = datetime.now()
+    agora = obter_horario_brasilia()
+    data_atual = agora.strftime("%d/%m/%Y")
+    hora_atual = agora.strftime("%H:%M:%S")
     hoje_str = str(date.today())
     houve_alteracao = False
 
@@ -625,7 +668,7 @@ elif st.session_state.view == "colaborador":
     status_instalacao = str(user_data.get("instalado", "0"))
 
     if status_instalacao == "0":
-        #st.warning("⚠️ **Atenção:** Você ainda não instalou o aplicativo sentinela neste computador.")
+        st.warning("⚠️ **Atenção:** Você ainda não instalou o aplicativo sentinela neste computador.")
         caminho_setup = os.path.join("assets", "UPYNEX_Setup.exe")
         
         if os.path.exists(caminho_setup):
@@ -642,9 +685,7 @@ elif st.session_state.view == "colaborador":
     else:
         st.caption("🛡️ Terminal Sentinela instalado e vinculado a este perfil.")
         
-    # Atualiza a tela a cada 15 segundos nativamente sem intervenção humana
-    st_autorefresh(interval=15 * 1000, key="auto_refresh_colab")
-    
+        
     # Processa imediatamente as saídas por inatividade antes de desenhar o restante da tela
     processar_saidas_automaticas_inatividade()
 
@@ -671,15 +712,25 @@ elif st.session_state.view == "colaborador":
     def monitor_tempo_real():
         processar_saidas_automaticas_inatividade()
 
-    sess_atual = df_sessoes[df_sessoes["id_colaborador"] == user_data["id"]]
+    # Consulta o status de batimento em tempo real na nuvem (Supabase)
     status_app = "🔴 Desconectado"
-    if not sess_atual.empty:
-        try:
-            ultimo_p = datetime.strptime(sess_atual.iloc[-1]["ultimo_pulso"], "%Y-%m-%d %H:%M:%S")
-            if (datetime.now() - ultimo_p).total_seconds() <= 180:
+    try:
+        res_sentinela = (
+            supabase.table("ponto_sentinela_status")
+            .select("*")
+            .eq("colaborador", user_data["nome"])
+            .order("ultimo_visto", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if res_sentinela.data and len(res_sentinela.data) > 0:
+            ultimo_visto_str = res_sentinela.data[0]["ultimo_visto"]
+            dt_visto = datetime.fromisoformat(ultimo_visto_str.replace("Z", "+00:00"))
+            agora_sp = obter_horario_brasilia()
+            if (agora_sp - dt_visto).total_seconds() <= 180:
                 status_app = "🟢 Conectado"
-        except:
-            pass
+    except Exception:
+        pass
 
     c_topo1, c_topo2 = st.columns([8, 2])
     with c_topo1:
@@ -707,19 +758,23 @@ elif st.session_state.view == "colaborador":
         col_esq, col_meio, col_tarefas = st.columns([3.5, 3.5, 3])
         
         with col_esq:
-            agora = datetime.now()
-            hoje_str = str(date.today())
-            pontos_hoje = df_pontos[(df_pontos["id_colaborador"] == user_data["id"]) & (df_pontos["data"] == hoje_str)]
+            agora = obter_horario_brasilia()
+            hoje_str = agora.strftime("%Y-%m-%d")
             
-            tipo_batida = "Entrada"
-            classe_btn = "btn-entrada"
-            if not pontos_hoje.empty and "Entrada" in pontos_hoje.iloc[-1]["tipo"]:
+            # 1. Consulta o último registro do colaborador direto no Supabase
+            ultimo_status_nuvem = buscar_ultimo_registro(user_data["nome"])
+            
+            # Se o último registro de hoje foi ENTRADA, o próximo deve ser Saída
+            if ultimo_status_nuvem == "ENTRADA":
                 tipo_batida = "Saída"
                 classe_btn = "btn-saida"
+            else:
+                tipo_batida = "Entrada"
+                classe_btn = "btn-entrada"
 
             st.markdown(f"""
                 <div class="metric-box">
-                    <small style="color:#666;">Data e Horário</small>
+                    <small style="color:#666;">Data e Horário Oficial (Brasília)</small>
                     <h3 style="margin: 4px 0; color: #0A0A0A; font-size: 1.8rem;">{agora.strftime('%H:%M:%S')}</h3>
                     <span style="font-weight: 500;">{agora.strftime('%d/%m/%Y')}</span>
                 </div>
@@ -727,6 +782,12 @@ elif st.session_state.view == "colaborador":
             
             st.markdown(f'<div class="{classe_btn}">', unsafe_allow_html=True)
             if st.button(f"Confirmar {tipo_batida}", key="btn_bater_ponto", use_container_width=True):
+                tipo_banco = "ENTRADA" if tipo_batida == "Entrada" else "SAIDA"
+                
+                # Salva no banco de dados na nuvem (Supabase)
+                registrar_ponto(user_data["nome"], tipo_banco)
+                
+                # Salva também no arquivo local para compatibilidade com o espelho do painel
                 novo_ponto = pd.DataFrame([{
                     "id_colaborador": user_data["id"],
                     "data": hoje_str,
@@ -736,6 +797,7 @@ elif st.session_state.view == "colaborador":
                 }])
                 df_pontos = pd.concat([df_pontos, novo_ponto], ignore_index=True)
                 df_pontos.to_csv(FILE_PONTOS, index=False)
+                
                 st.session_state["msg_ponto_sucesso"] = f"Ponto de {tipo_batida} registrado às {agora.strftime('%H:%M:%S')}!"
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
