@@ -625,7 +625,7 @@ elif st.session_state.view == "colaborador":
     status_instalacao = str(user_data.get("instalado", "0"))
 
     if status_instalacao == "0":
-        st.warning("⚠️ **Atenção:** Você ainda não instalou o aplicativo sentinela neste computador.")
+        #st.warning("⚠️ **Atenção:** Você ainda não instalou o aplicativo sentinela neste computador.")
         caminho_setup = os.path.join("assets", "UPYNEX_Setup.exe")
         
         if os.path.exists(caminho_setup):
