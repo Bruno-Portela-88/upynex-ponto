@@ -664,10 +664,35 @@ elif st.session_state.view == "colaborador":
     st_autorefresh(interval=15 * 1000, key="auto_refresh_colab_unique")
     processar_saidas_automaticas_inatividade()
 
-    # 3. Bloco Inteligente de Download do Instalador
-    status_instalacao = str(user_data.get("instalado", "0"))
+    # CONSULTA O STATUS EM TEMPO REAL ANTES DE MOSTRAR O AVISO
+    status_app = "🔴 Desconectado"
+    try:
+        res_sentinela = (
+            supabase.table("ponto_sentinela_status")
+            .select("*")
+            .eq("colaborador", user_data["nome"])
+            .order("ultimo_visto", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if res_sentinela.data and len(res_sentinela.data) > 0:
+            ultimo_visto_str = res_sentinela.data[0]["ultimo_visto"]
+            dt_visto = datetime.fromisoformat(ultimo_visto_str.replace("Z", "+00:00"))
+            agora_sp = obter_horario_brasilia()
+            if (agora_sp - dt_visto).total_seconds() <= 180:
+                status_app = "🟢 Conectado"
+                # Se detectou a máquina online, grava como instalado
+                idx_u = df_users[df_users["id"] == user_data["id"]].index[0]
+                if str(user_data.get("instalado", "0")) != "1":
+                    df_users.at[idx_u, "instalado"] = "1"
+                    df_users.to_csv(FILE_USERS, index=False)
+    except Exception:
+        pass
 
-    if status_instalacao == "0":
+    # SÓ EXIBE SE ESTIVER DESCONECTADO E O BANCO AINDA PEDIR INSTALAÇÃO
+    precisa_instalar = (status_app != "🟢 Conectado") and (str(user_data.get("instalado", "0")) == "0")
+
+    if precisa_instalar:
         st.warning("⚠️ **Atenção:** Você ainda não instalou o aplicativo sentinela neste computador.")
         caminho_setup = os.path.join("assets", "UPYNEX_Setup.exe")
         
@@ -683,7 +708,7 @@ elif st.session_state.view == "colaborador":
         else:
             st.info("Arquivo de instalação em preparação pelo suporte.")
     else:
-        st.caption("🛡️ Terminal Sentinela instalado e vinculado a este perfil.")
+        st.caption("🛡️ Terminal Sentinela instalado e ativo neste perfil.")
         
         
     # Processa imediatamente as saídas por inatividade antes de desenhar o restante da tela
